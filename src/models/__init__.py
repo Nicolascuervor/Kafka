@@ -1,0 +1,1 @@
+# IoT Kafka - Models Package
