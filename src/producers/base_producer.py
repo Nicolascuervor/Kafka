@@ -17,6 +17,7 @@ import time
 from abc import ABC, abstractmethod
 
 from confluent_kafka import Producer
+from confluent_kafka.admin import AdminClient, NewTopic
 
 from src.config import settings
 from src.models.sensor_reading import SensorReading
@@ -79,6 +80,32 @@ class BaseProducer(ABC):
                 self._unit,
             )
 
+    def _ensure_topic(self):
+        """
+        Crea el topic si no existe.
+
+        Equivalente a exchange_declare() en RabbitMQ.
+        En RabbitMQ, el exchange se creaba automáticamente al declararlo.
+        En Kafka, usamos AdminClient para verificar/crear el topic.
+        Esto garantiza que cualquiera que clone el proyecto pueda
+        ejecutarlo sin pasos manuales adicionales.
+        """
+        admin = AdminClient({"bootstrap.servers": settings.KAFKA_BOOTSTRAP_SERVERS})
+        metadata = admin.list_topics(timeout=5)
+
+        if settings.TOPIC_NAME not in metadata.topics:
+            topic = NewTopic(
+                settings.TOPIC_NAME,
+                num_partitions=settings.NUM_PARTITIONS,
+                replication_factor=settings.REPLICATION_FACTOR,
+            )
+            futures = admin.create_topics([topic])
+            for topic_name, future in futures.items():
+                future.result()  # Espera a que se cree
+                logger.info("Topic '%s' creado automáticamente.", topic_name)
+        else:
+            logger.info("Topic '%s' ya existe.", settings.TOPIC_NAME)
+
     def run(self):
         """
         Template Method: define el ciclo de vida del productor.
@@ -86,11 +113,12 @@ class BaseProducer(ABC):
         Diferencias vs RabbitMQ:
             1. No hay 'conexión' ni 'canal'. El Producer de Kafka
                maneja conexiones internamente.
-            2. No hay exchange_declare(). El topic ya fue creado.
+            2. _ensure_topic() reemplaza a exchange_declare().
             3. produce() es asíncrono: encola el mensaje en un buffer.
             4. poll() dispara callbacks de entregas completadas.
             5. flush() al salir asegura que todos los mensajes pendientes se envíen.
         """
+        self._ensure_topic()
         producer = Producer(self._producer_config)
         logger.info("Productor '%s' iniciado.", self._sensor_id)
 
